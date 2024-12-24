@@ -8,7 +8,7 @@ from eventsub.eventsub_webhook import app
 
 # Environment variables
 bot_username = "testbot"
-streamer_username = "dishsoap"
+streamer_username = "itsryanhiga"
 
 def start_webhook_server():
     """
@@ -33,10 +33,10 @@ def main():
     # print("Verifying EventSub subscriptions...")
     # verify_eventsub(streamer_id)
 
-    # Step 3: Start Webhook Server
-    print("Starting EventSub webhook server...")
-    webhook_thread = threading.Thread(target=start_webhook_server, daemon=True)
-    webhook_thread.start()
+    # # Step 3: Start Webhook Server
+    # print("Starting EventSub webhook server...")
+    # webhook_thread = threading.Thread(target=start_webhook_server, daemon=True)
+    # webhook_thread.start()
 
     # Step 4: Connect to Twitch Chat
     print(f"Connecting to {streamer_username}'s chat...")
@@ -49,7 +49,7 @@ def main():
     except KeyboardInterrupt:
         print("Shutting down...")
         sock.close()
-        webhook_thread.join()
+        # webhook_thread.join()
 
 if __name__ == "__main__":
     main()

@@ -37,7 +37,7 @@ def connect_to_chat(bot_username, streamer_username):
     return sock
 
 
-def log_chat_messages(sock, log_buffer, interval_end_event):
+def log_chat_messages(sock, log_buffer, interval_end_event, special_event_buffer):
     """
     Records all chat messages including username and timestamp
     """
@@ -56,6 +56,69 @@ def log_chat_messages(sock, log_buffer, interval_end_event):
                 log_buffer.append({"timestamp": timestamp, "username": username, "message": message})
 
                 print(f"[{timestamp}] {username}: {message}")
+
+
+            elif "USERNOTICE" in response:
+
+                # Parse specific user notice events
+
+                tags, content = response.split(" :", 1)
+
+                tag_parts = {tag.split('=')[0]: tag.split('=')[1] for tag in tags.split(';') if '=' in tag}
+
+                timestamp = datetime.now(UTC).strftime('%Y-%m-%dT%H:%M:%SZ')
+
+                msg_id = tag_parts.get("msg-id", "")
+
+                username = tag_parts.get("login", "anonymous")
+
+                # Filter for specific types of USERNOTICE
+
+                if msg_id in {"sub", "resub", "subgift", "submysterygift", "raid"}:
+
+                    event_data = {"timestamp": timestamp, "event_type": msg_id, "username": username}
+
+                    if msg_id == "resub":
+
+                        months = tag_parts.get("msg-param-cumulative-months", "1")
+
+                        event_data["months"] = months
+
+                        print(f"[{timestamp}] {username} resubscribed for {months} months!")
+
+
+                    elif msg_id == "subgift":
+
+                        recipient = tag_parts.get("msg-param-recipient-user-name", "unknown")
+
+                        event_data["recipient"] = recipient
+
+                        print(f"[{timestamp}] {username} gifted a subscription to {recipient}!")
+
+
+                    elif msg_id == "submysterygift":
+
+                        gift_count = tag_parts.get("msg-param-mass-gift-count", "1")
+
+                        event_data["gift_count"] = gift_count
+
+                        print(f"[{timestamp}] {username} gifted {gift_count} subscriptions!")
+
+
+                    elif msg_id == "raid":
+
+                        raider_count = tag_parts.get("msg-param-viewerCount", "0")
+
+                        event_data["raider_count"] = raider_count
+
+                        print(f"[{timestamp}] {username} raided the channel with {raider_count} viewers!")
+
+
+                    else:
+
+                        print(f"[{timestamp}] {username} subscribed!")
+
+                    special_event_buffer.append(event_data)
 
     except Exception as e:
         print(f"Error: {e}")
@@ -92,6 +155,7 @@ def manage_intervals(sock, streamer_username, interval_minutes=10):
     Determines the interval recorded and notes viewers, subscribers gained, and followers gained in that time
     """
     log_buffer = []
+    special_event_buffer = []
     interval_start = datetime.now(UTC)
 
     while True:
@@ -100,7 +164,7 @@ def manage_intervals(sock, streamer_username, interval_minutes=10):
 
             # Wait for the interval to finish
             interval_end_event = Event()
-            logging_thread = Thread(target=log_chat_messages, args=(sock, log_buffer, interval_end_event))
+            logging_thread = Thread(target=log_chat_messages, args=(sock, log_buffer, interval_end_event, special_event_buffer))
             logging_thread.start()
 
             while datetime.now(UTC) < interval_end:
@@ -117,6 +181,7 @@ def manage_intervals(sock, streamer_username, interval_minutes=10):
                 "start_time": interval_start.strftime('%Y-%m-%dT%H:%M:%SZ'),
                 "end_time": interval_end.strftime('%Y-%m-%dT%H:%M:%SZ'),
                 "chat_logs": log_buffer,
+                "special_events": special_event_buffer,
                 "viewers": viewers,
                 "subscribers_gained": subs_gained,
                 "followers_gained": followers_gained
@@ -128,6 +193,7 @@ def manage_intervals(sock, streamer_username, interval_minutes=10):
             # Reset for the next interval
             interval_start = interval_end
             log_buffer.clear()
+            special_event_buffer.clear()
 
         except KeyboardInterrupt:
             print("Exiting interval manager...")
