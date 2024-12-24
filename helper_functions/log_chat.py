@@ -31,6 +31,7 @@ def connect_to_chat(bot_username, streamer_username):
     # Authenticate and join the chat
     sock.send(f"PASS oauth:{oauth_token}\n".encode('utf-8'))
     sock.send(f"NICK {bot_username}\n".encode('utf-8'))
+    sock.send("CAP REQ :twitch.tv/tags twitch.tv/commands twitch.tv/membership\n".encode('utf-8'))
     sock.send(f"JOIN #{streamer_username}\n".encode('utf-8'))
 
     print(f"Connected to {streamer_username}'s chat!")
@@ -39,7 +40,8 @@ def connect_to_chat(bot_username, streamer_username):
 
 def log_chat_messages(sock, log_buffer, interval_end_event, special_event_buffer):
     """
-    Records all chat messages including username and timestamp
+    Records all chat messages including username, relevant designations, and the message,
+    while removing unnecessary metadata.
     """
     try:
         while True:
@@ -48,77 +50,89 @@ def log_chat_messages(sock, log_buffer, interval_end_event, special_event_buffer
             if response.startswith('PING'):
                 sock.send("PONG\n".encode('utf-8'))
             elif "PRIVMSG" in response:
-                parts = response.split(' ', 3)
-                username = parts[0].split('!')[0][1:]
-                message = parts[3][1:].strip()
-                timestamp = datetime.now(UTC).strftime('%Y-%m-%dT%H:%M:%SZ')
+                try:
+                    # Split response to extract tags and message
+                    parts = response.split(" :", 1)
+                    if len(parts) < 2:
+                        continue  # Skip malformed messages
 
-                log_buffer.append({"timestamp": timestamp, "username": username, "message": message})
+                    # Extract tags and message body
+                    tags = parts[0]
+                    message = parts[1].strip()  # The actual message text
+                    tag_parts = {tag.split('=')[0]: tag.split('=')[1] for tag in tags.split(';') if '=' in tag}
 
-                print(f"[{timestamp}] {username}: {message}")
+                    # Extract relevant fields
+                    username = tag_parts.get("display-name", "anonymous")
+                    badges = tag_parts.get("badges", "").split(',')
+                    filtered_badges = [
+                        badge for badge in badges
+                        if badge.startswith("subscriber") or badge.startswith("sub-gifter") or badge.startswith(
+                            "bits") or badge.startswith("premium")
+                    ]
+                    badges_display = ", ".join(filtered_badges) if filtered_badges else "none"
+                    timestamp = datetime.now(UTC).strftime('%Y-%m-%dT%H:%M:%SZ')
 
+                    # Clean message of unnecessary metadata
+                    if "PRIVMSG" in message:
+                        message = message.split("PRIVMSG", 1)[-1].strip()
+                        if "#" in message:
+                            message = message.split("#", 1)[-1].strip()
+
+                    # Prepare readable output
+                    formatted_output = f"[{timestamp}] {username} [{badges_display}]: {message}"
+                    print(formatted_output)
+
+                    # Add to log buffer in JSON-friendly format
+                    log_entry = {
+                        "timestamp": timestamp,
+                        "username": username,
+                        "designations": badges_display,
+                        "message": message
+                    }
+                    log_buffer.append(log_entry)
+                except Exception as e:
+                    print(f"Error processing PRIVMSG: {e}")
 
             elif "USERNOTICE" in response:
+                try:
+                    tags, content = response.split(" :", 1)
+                    tag_parts = {tag.split('=')[0]: tag.split('=')[1] for tag in tags.split(';') if '=' in tag}
+                    timestamp = datetime.now(UTC).strftime('%Y-%m-%dT%H:%M:%SZ')
+                    msg_id = tag_parts.get("msg-id", "")
+                    username = tag_parts.get("login", "anonymous")
+                    badges = tag_parts.get("badges", "").replace(',', ', ')
 
-                # Parse specific user notice events
-
-                tags, content = response.split(" :", 1)
-
-                tag_parts = {tag.split('=')[0]: tag.split('=')[1] for tag in tags.split(';') if '=' in tag}
-
-                timestamp = datetime.now(UTC).strftime('%Y-%m-%dT%H:%M:%SZ')
-
-                msg_id = tag_parts.get("msg-id", "")
-
-                username = tag_parts.get("login", "anonymous")
-
-                # Filter for specific types of USERNOTICE
-
-                if msg_id in {"sub", "resub", "subgift", "submysterygift", "raid"}:
-
-                    event_data = {"timestamp": timestamp, "event_type": msg_id, "username": username}
+                    # Create readable output for events
+                    event_data = {
+                        "timestamp": timestamp,
+                        "username": username,
+                        "designations": badges,
+                        "event_type": msg_id,
+                    }
 
                     if msg_id == "resub":
-
                         months = tag_parts.get("msg-param-cumulative-months", "1")
-
                         event_data["months"] = months
-
-                        print(f"[{timestamp}] {username} resubscribed for {months} months!")
-
+                        print(f"[{timestamp}] {username} [{badges}] resubscribed for {months} months!")
 
                     elif msg_id == "subgift":
-
                         recipient = tag_parts.get("msg-param-recipient-user-name", "unknown")
-
                         event_data["recipient"] = recipient
-
-                        print(f"[{timestamp}] {username} gifted a subscription to {recipient}!")
-
+                        print(f"[{timestamp}] {username} [{badges}] gifted a subscription to {recipient}!")
 
                     elif msg_id == "submysterygift":
-
                         gift_count = tag_parts.get("msg-param-mass-gift-count", "1")
-
                         event_data["gift_count"] = gift_count
-
-                        print(f"[{timestamp}] {username} gifted {gift_count} subscriptions!")
-
+                        print(f"[{timestamp}] {username} [{badges}] gifted {gift_count} subscriptions!")
 
                     elif msg_id == "raid":
-
                         raider_count = tag_parts.get("msg-param-viewerCount", "0")
-
                         event_data["raider_count"] = raider_count
-
-                        print(f"[{timestamp}] {username} raided the channel with {raider_count} viewers!")
-
-
-                    else:
-
-                        print(f"[{timestamp}] {username} subscribed!")
+                        print(f"[{timestamp}] {username} [{badges}] raided the channel with {raider_count} viewers!")
 
                     special_event_buffer.append(event_data)
+                except Exception as e:
+                    print(f"Error processing USERNOTICE: {e}")
 
     except Exception as e:
         print(f"Error: {e}")
@@ -157,6 +171,14 @@ def manage_intervals(sock, streamer_username, interval_minutes=10):
     log_buffer = []
     special_event_buffer = []
     interval_start = datetime.now(UTC)
+
+    # Initialize JSON file at the start
+    filename = f"{streamer_username}_chat_log.json"
+    if not os.path.exists(filename):
+        initial_data = []
+        with open(filename, "w") as file:
+            json.dump(initial_data, file, indent=4)
+        print(f"Initialized chat log file: {filename}")
 
     while True:
         try:
@@ -203,6 +225,4 @@ def manage_intervals(sock, streamer_username, interval_minutes=10):
             print(f"Error in interval manager: {e}")
             sock.close()
             break
-
-
 

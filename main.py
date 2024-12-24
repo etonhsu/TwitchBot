@@ -8,7 +8,7 @@ from eventsub.eventsub_webhook import app
 
 # Environment variables
 bot_username = "testbot"
-streamer_username = "itsryanhiga"
+streamer_username = "noraexplorer"
 
 def start_webhook_server():
     """
